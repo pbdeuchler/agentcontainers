@@ -1,0 +1,21 @@
+{
+  "installMethod": "native",
+  "autoUpdates": false,
+  "firstStartTime": "2025-08-01T22:22:55.651Z",
+  "userID": "7adfb9e69c7ac132da6f8ff495ea9eb4fe92483j47c5761891fedaf4676d2ed5",
+  "hasCompletedOnboarding": true,
+  "projects": {
+    "/workspace": {
+      "allowedTools": [],
+      "history": [],
+      "mcpContextUris": [],
+      "mcpServers": {},
+      "enabledMcpjsonServers": [],
+      "disabledMcpjsonServers": [],
+      "hasTrustDialogAccepted": true,
+      "projectOnboardingSeenCount": 0,
+      "hasClaudeMdExternalIncludesApproved": false,
+      "hasClaudeMdExternalIncludesWarningShown": false
+    }
+  }
+}
