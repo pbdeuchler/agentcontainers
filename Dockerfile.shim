@@ -1,0 +1,11 @@
+FROM golang:bookworm as build
+WORKDIR /usr/src/shim
+VOLUME /usr/src/shim
+
+COPY go.mod go.sum /usr/src/shim/
+COPY vendor /usr/src/shim/vendor
+COPY shim /usr/src/shim/shim
+
+RUN mkdir -p /usr/src/shim/build
+# Copy dependencies list
+RUN go build -o build/shim ./shim
