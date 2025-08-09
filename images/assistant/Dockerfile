@@ -23,6 +23,9 @@ RUN apt-get update && apt install -y --no-install-recommends \
   ca-certificates \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+RUN curl -sL https://deb.nodesource.com/setup_4.x | bash
+RUN apt-get install nodejs
+
 # Persist bash history.
 RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
   && mkdir /commandhistory \
@@ -65,8 +68,14 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 COPY .claude.json /root/.claude.json
 COPY .claude/ /root/.claude
 
+COPY .mcp.json /workspace/.mcp.json
+
+RUN mkdir -p /mnt/state
 
 COPY --from=agentcontainers/shim /usr/src/shim/build/shim /root/.local/bin/shim
+COPY --from=agentcontainers/mcp /usr/src/mcp/build/assistant-mcp /root/.local/bin/assistant-mcp
+
+COPY entrypoint.sh /root/.local/bin/entrypoint.sh
 
 ENV PATH="/root/.local/bin:${PATH}"
 ENV IS_SANDBOX=1

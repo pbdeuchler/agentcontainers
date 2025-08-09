@@ -1,0 +1,11 @@
+FROM golang:bookworm as build
+WORKDIR /usr/src/mcp
+VOLUME /usr/src/mcp
+
+COPY go.mod go.sum /usr/src/mcp/
+COPY vendor /usr/src/mcp/vendor
+COPY mcp /usr/src/mcp/mcp
+
+RUN mkdir -p /usr/src/mcp/build
+# Copy dependencies list
+RUN go build -o build/assistant-mcp ./mcp

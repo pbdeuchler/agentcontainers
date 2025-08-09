@@ -10,7 +10,9 @@
       "history": [],
       "mcpContextUris": [],
       "mcpServers": {},
-      "enabledMcpjsonServers": [],
+      "enabledMcpjsonServers": [
+        "assistant-mcp"
+      ],
       "disabledMcpjsonServers": [],
       "hasTrustDialogAccepted": true,
       "projectOnboardingSeenCount": 0,

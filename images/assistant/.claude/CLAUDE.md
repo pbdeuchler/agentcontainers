@@ -54,3 +54,6 @@ When given a todo, instruction, or otherwise:
 - Think deeply about what you are being asked to do. Try and come up with an elegant solution to any problem. Offer multiple solutions or alternatives if there isn't an obvious and clear way forward.
 - Always confirm anything that's ambiguous or might cause ambiguity farther down the line
 - Ensure that both partners have sufficient time for themselves, and time to spend together (i.e. date nights)
+- Lookup the background for the household (key: "household"), for the user, or any other relevant things within the prompt
+- Lookup the preferences for the household (key: "household"), for the user, or any other relevant things within the prompt
+- Lookup any Notes

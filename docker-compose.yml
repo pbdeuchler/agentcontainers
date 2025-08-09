@@ -10,6 +10,10 @@ services:
         ZSH_IN_DOCKER_VERSION: "1.2.0"
     env_file:
       - .secrets
+      - .env
+    network_mode: host
+    volumes:
+      - ./tmp:/mnt/state
 
   shim:
     image: agentcontainers/shim
@@ -19,3 +23,12 @@ services:
     volumes:
       - .:/usr/src/shim
     working_dir: /usr/src/shim
+
+  mcp:
+    image: agentcontainers/mcp
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    volumes:
+      - .:/usr/src/mcp
+    working_dir: /usr/src/mcp

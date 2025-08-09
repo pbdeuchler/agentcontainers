@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "assistant-mcp": {
+      "command": "assistant-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}

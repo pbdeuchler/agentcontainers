@@ -14,19 +14,24 @@ import (
 )
 
 type Request struct {
-	Prompt             string            `json:"prompt"`
+	Prompt             json.RawMessage   `json:"prompt"`
 	AppendSystemPrompt *string           `json:"append_system_prompt"`
 	AllowedTools       []string          `json:"allowed_tools"`
 	DisallowedTools    []string          `json:"disallowed_tools"`
 	ResumeSessionID    *string           `json:"resume_session_id"`
 	Env                map[string]string `json:"env"`
+	User               json.RawMessage   `json:"user,omitempty"` // Optional user field
 }
 
 func buildArgs(r Request) []string {
+	if len(r.Prompt) == 0 {
+		log.Fatal("prompt is required")
+	}
+
 	args := []string{
 		"--output-format=json",
 		"--dangerously-skip-permissions",
-		"-p", r.Prompt,
+		"-p", fmt.Sprintf(`"%s"`, string(r.Prompt)),
 	}
 
 	if r.AppendSystemPrompt != nil {
@@ -94,10 +99,44 @@ func handler(r Request) (events.APIGatewayProxyResponse, error) {
 	}, nil
 }
 
+func fsShim() {
+	// check if /mnt/state exists
+	if _, err := os.Stat("/mnt/state"); os.IsNotExist(err) {
+		log.Println("fs-shim: /mnt/state does not exist, please mount it")
+		return
+	}
+	// check if /mnt/state/projects exists
+	if _, err := os.Stat("/mnt/state/projects"); os.IsNotExist(err) {
+		// create /mnt/state/projects
+		if err := os.MkdirAll("/mnt/state/projects", 0o755); err != nil {
+			log.Fatalf("failed to create /mnt/state/projects: %v", err)
+		}
+	}
+	// symlink /mnt/state/projects to /root/.claude/projects
+	if err := os.Symlink("/mnt/state/projects", "/root/.claude/projects"); err != nil {
+		log.Fatalf("failed to create symlink: %v", err)
+	}
+	// check if /mnt/state/__store.db exists
+	if _, err := os.Stat("/mnt/state/__store.db"); os.IsNotExist(err) {
+		// create an empty sqlite db at __store.db
+		if _, err := os.Create("/mnt/state/__store.db"); err != nil {
+			log.Fatalf("failed to create __store.db: %v", err)
+		}
+	}
+	// symlink /mnt/state/__store.db to /root/.claude/__store.db
+	if err := os.Symlink("/mnt/state/__store.db", "/root/.claude/__store.db"); err != nil {
+		log.Fatalf("failed to create symlink: %v", err)
+	}
+}
+
 func main() {
 	if os.Getenv("LAMBDA") == "true" {
 		lambda.Start(handler)
 		return
+	}
+
+	if os.Getenv("FS_SHIM") != "" {
+		fsShim()
 	}
 
 	if len(os.Args) < 2 {
