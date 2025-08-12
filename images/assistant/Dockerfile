@@ -23,8 +23,8 @@ RUN apt-get update && apt install -y --no-install-recommends \
   ca-certificates \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN curl -sL https://deb.nodesource.com/setup_4.x | bash
-RUN apt-get install nodejs
+RUN curl -sL https://deb.nodesource.com/setup_20.x | bash
+RUN apt-get install -y nodejs
 
 # Persist bash history.
 RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
@@ -74,6 +74,8 @@ RUN mkdir -p /mnt/state
 
 COPY --from=agentcontainers/shim /usr/src/shim/build/shim /root/.local/bin/shim
 COPY --from=agentcontainers/mcp /usr/src/mcp/build/assistant-mcp /root/.local/bin/assistant-mcp
+
+RUN npx -y @notionhq/notion-mcp-server
 
 COPY entrypoint.sh /root/.local/bin/entrypoint.sh
 

@@ -11,7 +11,8 @@
       "mcpContextUris": [],
       "mcpServers": {},
       "enabledMcpjsonServers": [
-        "assistant-mcp"
+        "assistant-mcp",
+        "notionApi"
       ],
       "disabledMcpjsonServers": [],
       "hasTrustDialogAccepted": true,
