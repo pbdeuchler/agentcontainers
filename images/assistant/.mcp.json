@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "assistant-mcp": {
-      "command": "assistant-mcp",
-      "args": [],
+      "type": "stdio",
+      "command": "mcp-proxy",
+      "args": ["--name", "assistantserver"],
       "env": {}
     }
   }

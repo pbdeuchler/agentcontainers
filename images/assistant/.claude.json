@@ -6,14 +6,11 @@
   "hasCompletedOnboarding": true,
   "projects": {
     "/workspace": {
-      "allowedTools": [],
+      "allowedTools": ["mcp__assistant-mcp"],
       "history": [],
       "mcpContextUris": [],
       "mcpServers": {},
-      "enabledMcpjsonServers": [
-        "assistant-mcp",
-        "notionApi"
-      ],
+      "enabledMcpjsonServers": ["assistant-mcp", "notionApi"],
       "disabledMcpjsonServers": [],
       "hasTrustDialogAccepted": true,
       "projectOnboardingSeenCount": 0,

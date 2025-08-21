@@ -1,141 +1,49 @@
-# Assistant MCP Server
+# MCP HTTP Proxy Server
 
-This is an MCP (Model Context Protocol) server that wraps the Assistant HTTP API for LLM usage.
-
-## Overview
-
-The Assistant MCP Server exposes the Assistant HTTP API's functionality as MCP tools, allowing LLMs to interact with:
-
-- **Todos** - Create, read, update, delete, and list todo items
-- **Backgrounds** - Manage background/wallpaper entries
-- **Preferences** - Store and retrieve user preferences
-- **Notes** - Create and manage notes
-
-## Installation
-
-1. Build the server:
-```bash
-go build -o assistant-mcp-server
-```
-
-2. Set the Assistant API URL (optional, defaults to http://localhost:8080):
-```bash
-export ASSISTANT_API_URL=http://localhost:8080
-```
+A generic MCP (Model Context Protocol) server that provides HTTP proxy functionality to other hosted MCP servers.
 
 ## Usage
 
-The MCP server communicates via JSON-RPC over stdin/stdout. It's designed to be used with MCP-compatible LLM clients.
-
-### Configuration
-
-Add to your MCP client configuration:
-
-```json
-{
-  "mcpServers": {
-    "assistant": {
-      "command": "/path/to/assistant-mcp-server",
-      "env": {
-        "ASSISTANT_API_URL": "http://localhost:8080"
-      }
-    }
-  }
-}
+```bash
+./mcp-proxy -name <server-name>
 ```
 
-## Available Tools
+The proxy server uses the `name` parameter to lookup an environment variable `${name}_HOST` that specifies the target MCP server to proxy to.
 
-### Todo Tools
-- `create_todo` - Create a new todo item
-- `get_todo` - Get a todo by UID
-- `list_todos` - List todos with filtering and sorting
-- `update_todo` - Update an existing todo
-- `delete_todo` - Delete a todo
+## Example
 
-### Background Tools
-- `create_background` - Create a background entry
-- `get_background` - Get a background by key
-- `list_backgrounds` - List all backgrounds
-- `update_background` - Update a background entry
-- `delete_background` - Delete a background entry
+```bash
+# Set the target MCP server
+export myserver_HOST="http://localhost:3000"
 
-### Preferences Tools
-- `create_preferences` - Create user preferences
-- `get_preferences` - Get preferences by key and specifier
-- `list_preferences` - List all preferences
-- `update_preferences` - Update preferences
-- `delete_preferences` - Delete preferences
-
-### Notes Tools
-- `create_note` - Create a new note
-- `get_note` - Get a note by ID
-- `list_notes` - List notes with filtering
-- `update_note` - Update an existing note
-- `delete_note` - Delete a note
-
-## Data Structures
-
-### Todo
-```json
-{
-  "uid": "string",
-  "title": "string",
-  "description": "string",
-  "data": "string",
-  "priority": 1-4,
-  "due_date": "RFC3339 timestamp",
-  "recurs_on": "string",
-  "marked_complete": "RFC3339 timestamp",
-  "external_url": "string",
-  "created_by": "string",
-  "completed_by": "string",
-  "created_at": "RFC3339 timestamp",
-  "updated_at": "RFC3339 timestamp"
-}
+# Start the proxy
+./mcp-proxy -name myserver
 ```
 
-### Background
-```json
-{
-  "key": "string",
-  "value": "string",
-  "created_at": "RFC3339 timestamp",
-  "updated_at": "RFC3339 timestamp"
-}
-```
+## Features
 
-### Preferences
-```json
-{
-  "key": "string",
-  "specifier": "string",
-  "data": "string (JSON)",
-  "created_at": "RFC3339 timestamp",
-  "updated_at": "RFC3339 timestamp"
-}
-```
+- **Capability-Aware Proxying**: Only exposes and registers capabilities that the origin server actually supports
+- **Dynamic Discovery**: Automatically discovers and registers tools, resources, and prompts from the target server
+- **Full MCP Compatibility**: Supports all standard MCP operations including:
+  - Tools (list and call)
+  - Resources (list and read) 
+  - Prompts (list and get)
+- **HTTP Proxy**: Transparently proxies requests to target MCP servers over HTTP
+- **Error Handling**: Comprehensive error handling with detailed logging
 
-### Notes
-```json
-{
-  "id": "string",
-  "title": "string",
-  "relevant_user": "string",
-  "content": "string",
-  "created_at": "RFC3339 timestamp",
-  "updated_at": "RFC3339 timestamp"
-}
-```
+## Architecture
 
-## Priority Levels
+The proxy server:
+1. Takes a command line argument `name` 
+2. Looks up environment variable `${name}_HOST` for the target server URL
+3. Initializes connection to the target MCP server and discovers its capabilities
+4. Creates a proxy server with only the capabilities that the origin server supports
+5. Discovers and registers only the features (tools, resources, prompts) that the origin server provides
+6. Registers handlers that proxy requests to the target server
+7. Runs as a standard MCP server over stdio
 
-- 1: Low
-- 2: Medium  
-- 3: High
-- 4: Critical
+This ensures that clients connecting to the proxy only see the capabilities and features that are actually available from the origin server, following the MCP specification for capability negotiation.
 
-## Requirements
+## Dependencies
 
-- Go 1.24.3 or later
-- Running Assistant HTTP server
+Built using the [mcp-go](https://github.com/mark3labs/mcp-go) library for MCP protocol implementation.

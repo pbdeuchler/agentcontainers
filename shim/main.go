@@ -38,11 +38,13 @@ func buildArgs(r Request) []string {
 		args = append(args, "--append-system-prompt", *r.AppendSystemPrompt)
 	}
 	if len(r.AllowedTools) > 0 {
-		args = append(args, "--allowed-tools", strings.Join(r.AllowedTools, ","))
+		args = append(args, "--allowedTools", strings.Join(r.AllowedTools, ","))
 	}
+
 	if len(r.DisallowedTools) > 0 {
-		args = append(args, "--disallowed-tools", strings.Join(r.DisallowedTools, ","))
+		args = append(args, "--disallowedTools", strings.Join(r.DisallowedTools, ","))
 	}
+
 	if r.ResumeSessionID != nil {
 		args = append(args, "--resume", *r.ResumeSessionID)
 	}
@@ -77,10 +79,8 @@ func runClaude(r Request) (string, string, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		return out.String(), stderr.String(), err
-	}
-	return out.String(), stderr.String(), nil
+	err := cmd.Run()
+	return out.String(), stderr.String(), err
 }
 
 func handler(r Request) (events.APIGatewayProxyResponse, error) {
@@ -147,6 +147,16 @@ func main() {
 		log.Fatalf("invalid json: %v", err)
 	}
 	resp, err := handler(req)
-	fmt.Println(err)
-	fmt.Println(resp)
+	if err != nil {
+		resp = events.APIGatewayProxyResponse{
+			StatusCode: 500,
+			Body:       err.Error(),
+		}
+	}
+
+	output, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		log.Fatalf("failed to marshal response: %v", err)
+	}
+	fmt.Println(string(output))
 }

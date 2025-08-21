@@ -8,4 +8,4 @@ COPY mcp /usr/src/mcp/mcp
 
 RUN mkdir -p /usr/src/mcp/build
 # Copy dependencies list
-RUN go build -o build/assistant-mcp ./mcp
+RUN go build -o build/mcp-proxy ./mcp

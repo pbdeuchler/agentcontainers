@@ -1,8 +1,6 @@
 {
   "preferredNotifChannel": "terminal_bell",
   "permissions": {
-    "allow": [
-      "mcp__tree_sitter__text*"
-    ]
+    "allow": ["mcp__tree_sitter__text*", "mcp__assistant-mcp"]
   }
 }

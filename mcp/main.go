@@ -1,553 +1,340 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
 	"os"
 	"strings"
-	"time"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
-type MCPServer struct {
-	baseURL string
-}
-
-type MCPRequest struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      any             `json:"id"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
-}
-
-type MCPResponse struct {
-	JSONRPC string    `json:"jsonrpc"`
-	ID      any       `json:"id"`
-	Result  any       `json:"result,omitempty"`
-	Error   *MCPError `json:"error,omitempty"`
-}
-
-type MCPError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-type InitializeParams struct {
-	ProtocolVersion string         `json:"protocolVersion"`
-	Capabilities    map[string]any `json:"capabilities"`
-	ClientInfo      ClientInfo     `json:"clientInfo"`
-}
-
-type ClientInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-type InitializeResult struct {
-	ProtocolVersion string         `json:"protocolVersion"`
-	Capabilities    map[string]any `json:"capabilities"`
-	ServerInfo      ServerInfo     `json:"serverInfo"`
-}
-
-type ServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-type Tool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
-}
-
-type CallToolParams struct {
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-}
-
-type CallToolResult struct {
-	Content []Content `json:"content"`
-}
-
-type Content struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type Todo struct {
-	UID            string     `json:"uid"`
-	Title          string     `json:"title"`
-	Description    string     `json:"description"`
-	Data           string     `json:"data"`
-	Priority       int        `json:"priority"`
-	DueDate        *time.Time `json:"due_date"`
-	RecursOn       string     `json:"recurs_on"`
-	MarkedComplete *time.Time `json:"marked_complete"`
-	ExternalURL    string     `json:"external_url"`
-	CreatedBy      string     `json:"created_by"`
-	CompletedBy    string     `json:"completed_by"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-}
-
-type Background struct {
-	Key       string    `json:"key"`
-	Value     string    `json:"value"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-type Preferences struct {
-	Key       string    `json:"key"`
-	Specifier string    `json:"specifier"`
-	Data      string    `json:"data"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-type Notes struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	RelevantUser string    `json:"relevant_user"`
-	Content      string    `json:"content"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
-
-func NewMCPServer(baseURL string) *MCPServer {
-	return &MCPServer{baseURL: baseURL}
-}
-
 func main() {
-	baseURL := os.Getenv("ASSISTANT_API_URL")
-	if baseURL == "" {
-		baseURL = "http://localhost:8080"
+	var name string
+	flag.StringVar(&name, "name", "", "Name of the MCP server to proxy to (required)")
+	flag.Parse()
+
+	if name == "" {
+		log.Fatal("Error: -name argument is required")
 	}
 
-	server := NewMCPServer(baseURL)
-	server.Run()
-}
+	// Look up the host from environment variable
+	hostEnvVar := strings.ToUpper(name) + "_HOST"
+	targetHost := os.Getenv(hostEnvVar)
+	if targetHost == "" {
+		log.Fatalf("Error: environment variable %s is not set", hostEnvVar)
+	}
 
-func (s *MCPServer) Run() {
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
+	log.Printf("Starting MCP proxy server for %s, proxying to %s", name, targetHost)
 
-		var request MCPRequest
-		if err := json.Unmarshal([]byte(line), &request); err != nil {
-			s.sendError(request.ID, -32700, "Parse error")
-			continue
-		}
+	// Create HTTP proxy client
+	proxyClient := &HTTPProxyClient{targetHost: targetHost}
 
-		switch request.Method {
-		case "initialize":
-			s.handleInitialize(request)
-		case "tools/list":
-			s.handleToolsList(request)
-		case "tools/call":
-			s.handleToolsCall(request)
-		default:
-			s.sendError(request.ID, -32601, "Method not found")
+	// Initialize connection to target server and discover capabilities
+	if err := proxyClient.Initialize(context.Background()); err != nil {
+		log.Fatalf("Failed to initialize proxy client: %v", err)
+	}
+
+	// Create the MCP server with capabilities matching the origin server
+	mcpServer := proxyClient.CreateMCPServerWithCapabilities()
+
+	// Only discover and register features that the origin server supports
+	if proxyClient.capabilities.Tools != nil {
+		if err := proxyClient.RegisterToolsOnServer(context.Background(), mcpServer); err != nil {
+			log.Printf("Warning: Failed to register tools: %v", err)
 		}
+	} else {
+		log.Printf("Origin server does not support tools - skipping tool discovery")
+	}
+
+	if proxyClient.capabilities.Resources != nil {
+		if err := proxyClient.RegisterResourcesOnServer(context.Background(), mcpServer); err != nil {
+			log.Printf("Warning: Failed to register resources: %v", err)
+		}
+	} else {
+		log.Printf("Origin server does not support resources - skipping resource discovery")
+	}
+
+	if proxyClient.capabilities.Prompts != nil {
+		if err := proxyClient.RegisterPromptsOnServer(context.Background(), mcpServer); err != nil {
+			log.Printf("Warning: Failed to register prompts: %v", err)
+		}
+	} else {
+		log.Printf("Origin server does not support prompts - skipping prompt discovery")
+	}
+
+	// Create and run the stdio server
+	if err := server.ServeStdio(mcpServer); err != nil {
+		log.Fatalf("Server error: %v", err)
 	}
 }
 
-func (s *MCPServer) handleInitialize(request MCPRequest) {
-	result := InitializeResult{
-		ProtocolVersion: "2024-11-05",
-		Capabilities: map[string]any{
-			"tools": map[string]any{},
+// HTTPProxyClient handles HTTP requests to the target MCP server
+type HTTPProxyClient struct {
+	targetHost   string
+	client       *http.Client
+	capabilities mcp.ServerCapabilities
+}
+
+// Initialize sets up the HTTP client and tests connectivity to target server
+func (h *HTTPProxyClient) Initialize(ctx context.Context) error {
+	h.client = &http.Client{}
+	log.Printf("Initializing proxy connection to %s", h.targetHost)
+
+	// Test connection with an initialize request
+	initParams := mcp.InitializeParams{
+		ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+		Capabilities: mcp.ClientCapabilities{
+			Roots: &struct {
+				ListChanged bool `json:"listChanged,omitempty"`
+			}{ListChanged: false},
 		},
-		ServerInfo: ServerInfo{
-			Name:    "assistant-mcp-server",
+		ClientInfo: mcp.Implementation{
+			Name:    "mcp-proxy",
 			Version: "1.0.0",
 		},
 	}
 
-	s.sendResponse(request.ID, result)
-}
-
-func (s *MCPServer) handleToolsList(request MCPRequest) {
-	tools := []Tool{
-		{
-			Name:        "create_todo",
-			Description: "Create a new todo item",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"title":        map[string]any{"type": "string", "description": "Todo title"},
-					"description":  map[string]any{"type": "string", "description": "Todo description"},
-					"data":         map[string]any{"type": "string", "description": "Additional data"},
-					"priority":     map[string]any{"type": "integer", "description": "Priority (1=low, 2=medium, 3=high, 4=critical)"},
-					"due_date":     map[string]any{"type": "string", "description": "Due date in RFC3339 format"},
-					"recurs_on":    map[string]any{"type": "string", "description": "Recurrence pattern"},
-					"external_url": map[string]any{"type": "string", "description": "External URL"},
-					"created_by":   map[string]any{"type": "string", "description": "Creator identifier"},
-				},
-				"required": []string{"title"},
-			},
-		},
-		{
-			Name:        "get_todo",
-			Description: "Get a todo item by UID",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"uid": map[string]any{"type": "string", "description": "Todo UID"},
-				},
-				"required": []string{"uid"},
-			},
-		},
-		{
-			Name:        "list_todos",
-			Description: "List todos with optional filters and sorting",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"limit":      map[string]any{"type": "integer", "description": "Number of items to return"},
-					"offset":     map[string]any{"type": "integer", "description": "Number of items to skip"},
-					"sort_by":    map[string]any{"type": "string", "description": "Field to sort by"},
-					"sort_dir":   map[string]any{"type": "string", "description": "Sort direction (asc/desc)"},
-					"title":      map[string]any{"type": "string", "description": "Filter by title"},
-					"priority":   map[string]any{"type": "string", "description": "Filter by priority"},
-					"created_by": map[string]any{"type": "string", "description": "Filter by creator"},
-				},
-			},
-		},
-		{
-			Name:        "complete_todo",
-			Description: "Complete a todo item",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"uid":          map[string]any{"type": "string", "description": "Todo UID"},
-					"completed_by": map[string]any{"type": "string", "description": "Completer identifier"},
-				},
-				"required": []string{"uid"},
-			},
-		},
-		{
-			Name:        "update_todo",
-			Description: "Update a todo item",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"uid":             map[string]any{"type": "string", "description": "Todo UID"},
-					"title":           map[string]any{"type": "string", "description": "Todo title"},
-					"description":     map[string]any{"type": "string", "description": "Todo description"},
-					"data":            map[string]any{"type": "string", "description": "Additional data"},
-					"priority":        map[string]any{"type": "integer", "description": "Priority (1=low, 2=medium, 3=high, 4=critical)"},
-					"due_date":        map[string]any{"type": "string", "description": "Due date in RFC3339 format"},
-					"recurs_on":       map[string]any{"type": "string", "description": "Recurrence pattern"},
-					"marked_complete": map[string]any{"type": "string", "description": "Completion timestamp in RFC3339 format"},
-					"external_url":    map[string]any{"type": "string", "description": "External URL"},
-					"completed_by":    map[string]any{"type": "string", "description": "Completer identifier"},
-				},
-				"required": []string{"uid"},
-			},
-		},
-		{
-			Name:        "delete_todo",
-			Description: "Delete a todo item",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"uid": map[string]any{"type": "string", "description": "Todo UID"},
-				},
-				"required": []string{"uid"},
-			},
-		},
-		{
-			Name:        "create_background",
-			Description: "Create a new background/wallpaper entry",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"key":   map[string]any{"type": "string", "description": "Background key"},
-					"value": map[string]any{"type": "string", "description": "Background value (URL or data)"},
-				},
-				"required": []string{"key", "value"},
-			},
-		},
-		{
-			Name:        "get_background",
-			Description: "Get a background by key",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"key": map[string]any{"type": "string", "description": "Background key"},
-				},
-				"required": []string{"key"},
-			},
-		},
-		{
-			Name:        "list_backgrounds",
-			Description: "List backgrounds",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"limit":  map[string]any{"type": "integer", "description": "Number of items to return"},
-					"offset": map[string]any{"type": "integer", "description": "Number of items to skip"},
-				},
-			},
-		},
-		{
-			Name:        "update_background",
-			Description: "Update a background entry",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"key":   map[string]any{"type": "string", "description": "Background key"},
-					"value": map[string]any{"type": "string", "description": "Background value (URL or data)"},
-				},
-				"required": []string{"key", "value"},
-			},
-		},
-		{
-			Name:        "delete_background",
-			Description: "Delete a background entry",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"key": map[string]any{"type": "string", "description": "Background key"},
-				},
-				"required": []string{"key"},
-			},
-		},
-		{
-			Name:        "create_preferences",
-			Description: "Create new preferences",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"key":       map[string]any{"type": "string", "description": "Preference key"},
-					"specifier": map[string]any{"type": "string", "description": "Preference specifier"},
-					"data":      map[string]any{"type": "string", "description": "Preference data (JSON)"},
-				},
-				"required": []string{"key", "specifier", "data"},
-			},
-		},
-		{
-			Name:        "get_preferences",
-			Description: "Get preferences by key and specifier",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"key":       map[string]any{"type": "string", "description": "Preference key"},
-					"specifier": map[string]any{"type": "string", "description": "Preference specifier"},
-				},
-				"required": []string{"key", "specifier"},
-			},
-		},
-		{
-			Name:        "list_preferences",
-			Description: "List preferences",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"limit":  map[string]any{"type": "integer", "description": "Number of items to return"},
-					"offset": map[string]any{"type": "integer", "description": "Number of items to skip"},
-				},
-			},
-		},
-		{
-			Name:        "update_preferences",
-			Description: "Update preferences",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"key":       map[string]any{"type": "string", "description": "Preference key"},
-					"specifier": map[string]any{"type": "string", "description": "Preference specifier"},
-					"data":      map[string]any{"type": "string", "description": "Preference data (JSON)"},
-				},
-				"required": []string{"key", "specifier", "data"},
-			},
-		},
-		{
-			Name:        "delete_preferences",
-			Description: "Delete preferences",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"key":       map[string]any{"type": "string", "description": "Preference key"},
-					"specifier": map[string]any{"type": "string", "description": "Preference specifier"},
-				},
-				"required": []string{"key", "specifier"},
-			},
-		},
-		{
-			Name:        "create_note",
-			Description: "Create a new note",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"title":         map[string]any{"type": "string", "description": "Note title"},
-					"relevant_user": map[string]any{"type": "string", "description": "Relevant user"},
-					"content":       map[string]any{"type": "string", "description": "Note content"},
-				},
-				"required": []string{"title", "content"},
-			},
-		},
-		{
-			Name:        "get_note",
-			Description: "Get a note by ID",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{"type": "string", "description": "Note ID"},
-				},
-				"required": []string{"id"},
-			},
-		},
-		{
-			Name:        "list_notes",
-			Description: "List notes with optional filters",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"limit":         map[string]any{"type": "integer", "description": "Number of items to return"},
-					"offset":        map[string]any{"type": "integer", "description": "Number of items to skip"},
-					"sort_by":       map[string]any{"type": "string", "description": "Field to sort by"},
-					"sort_dir":      map[string]any{"type": "string", "description": "Sort direction (asc/desc)"},
-					"title":         map[string]any{"type": "string", "description": "Filter by title"},
-					"relevant_user": map[string]any{"type": "string", "description": "Filter by relevant user"},
-				},
-			},
-		},
-		{
-			Name:        "update_note",
-			Description: "Update a note",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id":            map[string]any{"type": "string", "description": "Note ID"},
-					"title":         map[string]any{"type": "string", "description": "Note title"},
-					"relevant_user": map[string]any{"type": "string", "description": "Relevant user"},
-					"content":       map[string]any{"type": "string", "description": "Note content"},
-				},
-				"required": []string{"id"},
-			},
-		},
-		{
-			Name:        "delete_note",
-			Description: "Delete a note",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{"type": "string", "description": "Note ID"},
-				},
-				"required": []string{"id"},
-			},
-		},
-	}
-
-	result := map[string]any{
-		"tools": tools,
-	}
-
-	s.sendResponse(request.ID, result)
-}
-
-func (s *MCPServer) handleToolsCall(request MCPRequest) {
-	var params CallToolParams
-	if err := json.Unmarshal(request.Params, &params); err != nil {
-		s.sendError(request.ID, -32602, "Invalid params")
-		return
-	}
-
-	result, err := s.callTool(params.Name, params.Arguments)
+	result, err := h.proxyRequest(ctx, "initialize", initParams)
 	if err != nil {
-		s.sendError(request.ID, -32603, err.Error())
-		return
+		return fmt.Errorf("failed to initialize target server: %w", err)
 	}
 
-	s.sendResponse(request.ID, result)
+	// Parse the initialize result to capture server capabilities
+	var initResult mcp.InitializeResult
+	if err := json.Unmarshal(result, &initResult); err != nil {
+		return fmt.Errorf("failed to unmarshal initialize result: %w", err)
+	}
+
+	// Store the server capabilities for later use
+	h.capabilities = initResult.Capabilities
+	log.Printf("Discovered server capabilities: tools=%v, resources=%v, prompts=%v", 
+		h.capabilities.Tools != nil, h.capabilities.Resources != nil, h.capabilities.Prompts != nil)
+
+	log.Printf("Successfully initialized proxy to %s", h.targetHost)
+	return nil
 }
 
-func (s *MCPServer) callTool(name string, arguments json.RawMessage) (CallToolResult, error) {
-	switch name {
-	case "create_todo":
-		return s.createTodo(arguments)
-	case "get_todo":
-		return s.getTodo(arguments)
-	case "list_todos":
-		return s.listTodos(arguments)
-	case "complete_todo":
-		return s.completeTodo(arguments)
-	case "update_todo":
-		return s.updateTodo(arguments)
-	case "delete_todo":
-		return s.deleteTodo(arguments)
-	case "create_background":
-		return s.createBackground(arguments)
-	case "get_background":
-		return s.getBackground(arguments)
-	case "list_backgrounds":
-		return s.listBackgrounds(arguments)
-	case "update_background":
-		return s.updateBackground(arguments)
-	case "delete_background":
-		return s.deleteBackground(arguments)
-	case "create_preferences":
-		return s.createPreferences(arguments)
-	case "get_preferences":
-		return s.getPreferences(arguments)
-	case "list_preferences":
-		return s.listPreferences(arguments)
-	case "update_preferences":
-		return s.updatePreferences(arguments)
-	case "delete_preferences":
-		return s.deletePreferences(arguments)
-	case "create_note":
-		return s.createNote(arguments)
-	case "get_note":
-		return s.getNote(arguments)
-	case "list_notes":
-		return s.listNotes(arguments)
-	case "update_note":
-		return s.updateNote(arguments)
-	case "delete_note":
-		return s.deleteNote(arguments)
-	default:
-		return CallToolResult{}, fmt.Errorf("unknown tool: %s", name)
-	}
-}
+// RegisterToolsOnServer discovers tools from target server and registers them
+func (h *HTTPProxyClient) RegisterToolsOnServer(ctx context.Context, mcpServer *server.MCPServer) error {
+	log.Printf("Discovering tools from %s", h.targetHost)
 
-func (s *MCPServer) sendResponse(id any, result any) {
-	response := MCPResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result:  result,
-	}
-
-	data, _ := json.Marshal(response)
-	fmt.Println(string(data))
-}
-
-func (s *MCPServer) sendError(id any, code int, message string) {
-	response := MCPResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error: &MCPError{
-			Code:    code,
-			Message: message,
-		},
-	}
-
-	data, _ := json.Marshal(response)
-	fmt.Println(string(data))
-}
-
-func parseTime(timeStr string) *time.Time {
-	if timeStr == "" {
-		return nil
-	}
-	t, err := time.Parse(time.RFC3339, timeStr)
+	result, err := h.proxyRequest(ctx, "tools/list", mcp.PaginatedParams{})
 	if err != nil {
-		return nil
+		return fmt.Errorf("failed to list tools: %w", err)
 	}
-	return &t
+
+	var listResult mcp.ListToolsResult
+	if err := json.Unmarshal(result, &listResult); err != nil {
+		return fmt.Errorf("failed to unmarshal tools list: %w", err)
+	}
+
+	for _, tool := range listResult.Tools {
+		toolName := tool.Name
+		mcpServer.AddTool(tool, h.createToolHandler(toolName))
+		log.Printf("Registered tool: %s", toolName)
+	}
+
+	return nil
 }
+
+// RegisterResourcesOnServer discovers resources from target server and registers them
+func (h *HTTPProxyClient) RegisterResourcesOnServer(ctx context.Context, mcpServer *server.MCPServer) error {
+	log.Printf("Discovering resources from %s", h.targetHost)
+
+	result, err := h.proxyRequest(ctx, "resources/list", mcp.PaginatedParams{})
+	if err != nil {
+		return fmt.Errorf("failed to list resources: %w", err)
+	}
+
+	var listResult mcp.ListResourcesResult
+	if err := json.Unmarshal(result, &listResult); err != nil {
+		return fmt.Errorf("failed to unmarshal resources list: %w", err)
+	}
+
+	for _, resource := range listResult.Resources {
+		resourceURI := resource.URI
+		mcpServer.AddResource(resource, h.createResourceHandler(resourceURI))
+		log.Printf("Registered resource: %s", resourceURI)
+	}
+
+	return nil
+}
+
+// RegisterPromptsOnServer discovers prompts from target server and registers them
+func (h *HTTPProxyClient) RegisterPromptsOnServer(ctx context.Context, mcpServer *server.MCPServer) error {
+	log.Printf("Discovering prompts from %s", h.targetHost)
+
+	result, err := h.proxyRequest(ctx, "prompts/list", mcp.PaginatedParams{})
+	if err != nil {
+		return fmt.Errorf("failed to list prompts: %w", err)
+	}
+
+	var listResult mcp.ListPromptsResult
+	if err := json.Unmarshal(result, &listResult); err != nil {
+		return fmt.Errorf("failed to unmarshal prompts list: %w", err)
+	}
+
+	for _, prompt := range listResult.Prompts {
+		promptName := prompt.Name
+		mcpServer.AddPrompt(prompt, h.createPromptHandler(promptName))
+		log.Printf("Registered prompt: %s", promptName)
+	}
+
+	return nil
+}
+
+// createToolHandler creates a handler that proxies tool calls
+func (h *HTTPProxyClient) createToolHandler(toolName string) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		log.Printf("Proxying call_tool request for tool '%s' to %s", toolName, h.targetHost)
+
+		result, err := h.proxyRequest(ctx, "tools/call", request.Params)
+		if err != nil {
+			return nil, err
+		}
+
+		var callResult mcp.CallToolResult
+		if err := json.Unmarshal(result, &callResult); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal call_tool result: %w", err)
+		}
+
+		return &callResult, nil
+	}
+}
+
+// createResourceHandler creates a handler that proxies resource reads
+func (h *HTTPProxyClient) createResourceHandler(resourceURI string) server.ResourceHandlerFunc {
+	return func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+		log.Printf("Proxying read_resource request for URI '%s' to %s", resourceURI, h.targetHost)
+
+		result, err := h.proxyRequest(ctx, "resources/read", request.Params)
+		if err != nil {
+			return nil, err
+		}
+
+		var readResult mcp.ReadResourceResult
+		if err := json.Unmarshal(result, &readResult); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal read_resource result: %w", err)
+		}
+
+		return readResult.Contents, nil
+	}
+}
+
+// createPromptHandler creates a handler that proxies prompt requests
+func (h *HTTPProxyClient) createPromptHandler(promptName string) server.PromptHandlerFunc {
+	return func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		log.Printf("Proxying get_prompt request for prompt '%s' to %s", promptName, h.targetHost)
+
+		result, err := h.proxyRequest(ctx, "prompts/get", request.Params)
+		if err != nil {
+			return nil, err
+		}
+
+		var getResult mcp.GetPromptResult
+		if err := json.Unmarshal(result, &getResult); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal get_prompt result: %w", err)
+		}
+
+		return &getResult, nil
+	}
+}
+
+// proxyRequest makes an HTTP request to the target MCP server
+func (h *HTTPProxyClient) proxyRequest(ctx context.Context, method string, params any) ([]byte, error) {
+	if h.client == nil {
+		return nil, fmt.Errorf("HTTP client not initialized")
+	}
+
+	// Create JSON-RPC request
+	requestBody := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  method,
+		"params":  params,
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Make HTTP request
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", h.targetHost, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := h.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to make HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse JSON-RPC response
+	var jsonRPCResp struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      any             `json:"id"`
+		Result  json.RawMessage `json:"result,omitempty"`
+		Error   *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+			Data    any    `json:"data,omitempty"`
+		} `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &jsonRPCResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal JSON-RPC response: %w", err)
+	}
+
+	if jsonRPCResp.Error != nil {
+		return nil, fmt.Errorf("JSON-RPC error %d: %s", jsonRPCResp.Error.Code, jsonRPCResp.Error.Message)
+	}
+
+	return jsonRPCResp.Result, nil
+}
+
+// CreateMCPServerWithCapabilities creates an MCP server with capabilities matching the origin server
+func (h *HTTPProxyClient) CreateMCPServerWithCapabilities() *server.MCPServer {
+	var options []server.ServerOption
+
+	// Add capabilities based on what the origin server supports
+	if h.capabilities.Tools != nil {
+		options = append(options, server.WithToolCapabilities(h.capabilities.Tools.ListChanged))
+	}
+
+	if h.capabilities.Resources != nil {
+		options = append(options, server.WithResourceCapabilities(
+			h.capabilities.Resources.Subscribe, h.capabilities.Resources.ListChanged))
+	}
+
+	if h.capabilities.Prompts != nil {
+		options = append(options, server.WithPromptCapabilities(h.capabilities.Prompts.ListChanged))
+	}
+
+	if h.capabilities.Logging != nil {
+		options = append(options, server.WithLogging())
+	}
+
+	return server.NewMCPServer("mcp-proxy", "1.0.0", options...)
+}
+
