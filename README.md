@@ -14,6 +14,7 @@ AgentContainers allows you to run Claude Code and other AI agents in isolated, s
 ## Quick Start
 
 ### Prerequisites
+
 - Docker and Docker Compose
 - Anthropic API key (set in `.secrets` file as `ANTHROPIC_API_KEY=your-key`)
 
@@ -51,10 +52,11 @@ The shim accepts JSON requests with the following structure:
 {
   "prompt": "Your request to the AI agent",
   "append_system_prompt": "Additional context to append to system prompt (optional)",
-  "allowed_tools": ["Read", "Write", "Bash"],  // Whitelist specific tools (optional)
-  "disallowed_tools": ["WebFetch"],            // Blacklist specific tools (optional)
-  "resume_session_id": "session-123",          // Resume previous session (optional)
-  "env": {                                     // Custom environment variables (optional)
+  "allowed_tools": ["Read", "Write", "Bash"], // Whitelist specific tools (optional)
+  "disallowed_tools": ["WebFetch"], // Blacklist specific tools (optional)
+  "resume_session_id": "session-123", // Resume previous session (optional)
+  "env": {
+    // Custom environment variables (optional)
     "CUSTOM_VAR": "value"
   }
 }
@@ -74,6 +76,7 @@ The service returns an API Gateway-compatible response:
 ```
 
 Key response fields in the body:
+
 - `result`: The agent's text response
 - `session_id`: ID for resuming this conversation later
 - `is_error`: Whether the request failed
@@ -86,11 +89,13 @@ Key response fields in the body:
 ### Components
 
 1. **Shim Layer** (`/shim/main.go`)
+
    - Translates JSON requests to Claude Code CLI arguments
    - Handles AWS Lambda or direct HTTP invocation
    - Manages environment variables and session state
 
 2. **Assistant Container** (`/images/assistant/`)
+
    - Ubuntu 22.04 base image
    - Pre-installed Claude Code CLI
    - Configurable agent personas via system prompts
@@ -106,6 +111,7 @@ Key response fields in the body:
 ### State Management
 
 The system supports persistent state through filesystem mounting:
+
 - Session history stored in `/mnt/state/projects/`
 - SQLite database for metadata at `/mnt/state/__store.db`
 - Symlinked to Claude's expected locations at runtime
@@ -204,6 +210,7 @@ docker-compose run --rm assistant '{
 ## Current Implementation Status
 
 ### Implemented Features
+
 - ✅ Personal Assistant Agent ("Clarice") - A comprehensive household management assistant
 - ✅ Docker containerization with volume-based state persistence
 - ✅ AWS Lambda compatibility
@@ -214,6 +221,7 @@ docker-compose run --rm assistant '{
 - ✅ Cost tracking and usage reporting
 
 ### Roadmap
+
 - [ ] Additional pre-built agent personas
 - [ ] Web UI frontend
 - [ ] Mobile app integration
@@ -226,6 +234,7 @@ docker-compose run --rm assistant '{
 ## Contributing
 
 Contributions are welcome! This project aims to provide a standardized way to deploy AI agents in production environments. Areas of interest:
+
 - New agent implementations
 - Frontend integrations
 - Security enhancements
